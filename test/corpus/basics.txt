@@ -1,0 +1,202 @@
+================
+Integer literal
+================
+
+42
+
+---
+
+(source_file
+  (long))
+
+================
+Assignment
+================
+
+x:42
+
+---
+
+(source_file
+  (assignment
+    name: (name)
+    value: (long)))
+
+================
+Binary expression
+================
+
+3+4
+
+---
+
+(source_file
+  (binary_expr
+    left: (long)
+    op: (operator)
+    right: (long)))
+
+================
+Verb application
+================
+
+til 10
+
+---
+
+(source_file
+  (verb_application
+    verb: (verb)
+    arg: (long)))
+
+================
+Lambda
+================
+
+{x+1}
+
+---
+
+(source_file
+  (lambda
+    (body
+      (binary_expr
+        left: (name)
+        op: (operator)
+        right: (long)))))
+
+================
+Lambda with params
+================
+
+{[a;b] a+b}
+
+---
+
+(source_file
+  (lambda
+    (params (name) (name))
+    (body
+      (binary_expr
+        left: (name)
+        op: (operator)
+        right: (name)))))
+
+================
+Conditional
+================
+
+$[x>0;1;0]
+
+---
+
+(source_file
+  (cond
+    (binary_expr
+      left: (name)
+      op: (operator)
+      right: (long))
+    (long)
+    (long)))
+
+================
+Symbol
+================
+
+`hello
+
+---
+
+(source_file
+  (symbol))
+
+================
+String
+================
+
+"hello world"
+
+---
+
+(source_file
+  (string))
+
+================
+Dotted name
+================
+
+.z.t
+
+---
+
+(source_file
+  (dotted_name))
+
+================
+Global assignment
+================
+
+debug::0b
+
+---
+
+(source_file
+  (global_assignment
+    name: (name)
+    value: (bool_lit)))
+
+================
+If statement
+================
+
+if[x>0; y:1]
+
+---
+
+(source_file
+  (if_stmt
+    (binary_expr
+      left: (name)
+      op: (operator)
+      right: (long))
+    (assignment
+      name: (name)
+      value: (long))))
+
+================
+Dict literal
+================
+
+`a`b!1 2
+
+---
+
+(source_file
+  (binary_expr
+    left: (list_expr (symbol) (symbol))
+    op: (operator)
+    right: (list_expr (long) (long))))
+
+================
+Bracket apply
+================
+
+f[x;y]
+
+---
+
+(source_file
+  (bracket_apply
+    fn: (name)
+    (arg_list (name) (name))))
+
+================
+System command
+================
+
+system "d .qunit"
+
+---
+
+(source_file
+  (system_cmd (string)))
