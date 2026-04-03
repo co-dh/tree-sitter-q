@@ -1,0 +1,17 @@
+{
+  "grammars": [
+    {
+      "name": "q",
+      "scope": "source.q",
+      "path": ".",
+      "file-types": ["q"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for q/kdb+",
+    "authors": [{ "name": "Hao Deng" }]
+  }
+}
