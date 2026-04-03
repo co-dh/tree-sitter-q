@@ -1,4 +1,5 @@
 ; tree-sitter-q highlight queries for Helix
+; Last match wins — general patterns first, specific overrides after.
 
 ; ── Comments ──────────────────────────────────────────────
 (line_comment) @comment
@@ -24,20 +25,9 @@
 (signal "'" @keyword.control.exception)
 (early_return ":" @keyword.control.return)
 
-; ── Functions / verbs ─────────────────────────────────────
-(verb_expr verb: (verb) @function.builtin)
-(application fn: (identifier) @function)
-(system_cmd "system" @function.builtin)
-(system_cmd) @keyword
-
-; ── Parameters ────────────────────────────────────────────
-(params (identifier) @variable.parameter)
-
-; ── Assignment ────────────────────────────────────────────
-(assignment name: (identifier) @variable)
-(assignment name: (dotted_name) @variable)
-(global_assignment name: (identifier) @variable)
-(global_assignment name: (dotted_name) @variable)
+; ── Names (general fallback) ──────────────────────────────
+(identifier) @variable
+(dotted_name) @variable
 
 ; ── Strings ───────────────────────────────────────────────
 (string_lit) @string
@@ -58,6 +48,26 @@
 (inf_lit) @constant.builtin
 (generic_null) @constant.builtin
 
-; ── Names (general fallback) ──────────────────────────────
-(identifier) @variable
-(dotted_name) @variable
+; ── Assignment ────────────────────────────────────────────
+(assignment name: (identifier) @variable)
+(assignment name: (dotted_name) @variable)
+
+; ── Global assignment (override — yellow in onedark) ──────
+(global_assignment name: (identifier) @type)
+(global_assignment name: (dotted_name) @type)
+
+; ── Parameters (override general identifier) ──────────────
+(params (identifier) @variable.parameter)
+
+; ── Functions / verbs (override general identifier) ───────
+(verb) @function.builtin
+(application fn: (identifier) @function)
+(system_cmd "system" @function.builtin)
+(system_cmd) @keyword
+
+; ── Function definitions (override assignment — purple in onedark)
+(assignment name: (identifier) @function.macro value: (lambda))
+(global_assignment name: (identifier) @function.macro value: (lambda))
+
+; ── Reserved keywords (override verb) ─────────────────────
+((verb) @keyword (#any-of? @keyword "select" "exec" "update" "delete"))
