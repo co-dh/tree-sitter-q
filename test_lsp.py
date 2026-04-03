@@ -1,94 +1,170 @@
 #!/usr/bin/env python3
-"""Test the q LSP server end-to-end."""
+"""End-to-end tests for the q LSP server."""
 import subprocess, json, sys, threading, time
 
-proc = subprocess.Popen(["q", "lsp.q", "-q"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+proc = subprocess.Popen(["q", "lsp.q", "-q"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        cwd=sys.path[0] or ".")
 
-# Capture stderr in background
 stderr_lines = []
 def read_stderr():
     for line in proc.stderr:
         stderr_lines.append(line.decode().rstrip())
-t = threading.Thread(target=read_stderr, daemon=True)
-t.start()
+threading.Thread(target=read_stderr, daemon=True).start()
 
-def send(msg):
+seq = 0
+def send(method, params=None, notify=False):
+    global seq
+    msg = {"jsonrpc": "2.0", "method": method, "params": params or {}}
+    if not notify:
+        seq += 1
+        msg["id"] = seq
     body = json.dumps(msg).encode()
-    header = f"Content-Length: {len(body)}\r\n\r\n".encode()
-    proc.stdin.write(header + body)
+    proc.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
     proc.stdin.flush()
-    print(f"  -> sent {msg.get('method', msg.get('id','?'))}", file=sys.stderr)
+    return None if notify else seq
 
 def recv(timeout=5):
-    import select
     headers = {}
     deadline = time.time() + timeout
+    buf = b""
     while True:
         if time.time() > deadline:
-            print("TIMEOUT waiting for response", file=sys.stderr)
+            print("TIMEOUT", file=sys.stderr)
             print("stderr:", stderr_lines, file=sys.stderr)
-            proc.kill()
-            sys.exit(1)
+            proc.kill(); sys.exit(1)
         c = proc.stdout.read(1)
         if not c:
-            print("EOF on stdout", file=sys.stderr)
+            print("EOF", file=sys.stderr)
             print("stderr:", stderr_lines, file=sys.stderr)
-            proc.kill()
-            sys.exit(1)
-        # Build lines
-        if not hasattr(recv, '_buf'): recv._buf = b""
+            proc.kill(); sys.exit(1)
         if c == b"\n":
-            line = recv._buf.rstrip(b"\r")
-            recv._buf = b""
-            if not line:
-                break
+            line = buf.rstrip(b"\r")
+            buf = b""
+            if not line: break
             if line.startswith(b"Content-Length:"):
                 headers["cl"] = int(line.split(b":")[1].strip())
         else:
-            recv._buf += c
-    body = proc.stdout.read(headers["cl"])
-    r = json.loads(body)
-    print(f"  <- got response id={r.get('id','?')}", file=sys.stderr)
-    return r
+            buf += c
+    return json.loads(proc.stdout.read(headers["cl"]))
+
+pass_n = 0; fail_n = 0
+def check(name, cond):
+    global pass_n, fail_n
+    if cond:
+        pass_n += 1; print(f"  pass: {name}")
+    else:
+        fail_n += 1; print(f"  FAIL: {name}", file=sys.stderr)
 
 try:
-    send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}})
+    # ── Initialize ───────────────────────────────────────────
+    print("initialize")
+    send("initialize", {"capabilities": {}})
     r = recv()
-    print("init:", r.get("result",{}).get("serverInfo"))
+    caps = r["result"]["capabilities"]
+    check("has textDocumentSync", "textDocumentSync" in caps)
+    check("has completionProvider", "completionProvider" in caps)
+    check("has definitionProvider", caps.get("definitionProvider"))
+    check("has hoverProvider", caps.get("hoverProvider"))
+    check("has documentSymbolProvider", caps.get("documentSymbolProvider"))
+    check("serverInfo name", r["result"]["serverInfo"]["name"] == "q-lsp")
+    send("initialized", notify=True)
 
-    send({"jsonrpc":"2.0","method":"initialized","params":{}})
-
+    # ── Open document ────────────────────────────────────────
+    print("didOpen")
     text = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]"
-    send({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.q","languageId":"q","version":1,"text":text}}})
+    send("textDocument/didOpen", {"textDocument": {"uri": "file:///test.q", "languageId": "q", "version": 1, "text": text}}, notify=True)
+    time.sleep(0.1)  # let server process
 
-    send({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.q"},"position":{"line":0,"character":0}}})
+    # ── Hover: user-defined function ─────────────────────────
+    print("hover")
+    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 0, "character": 0}})
     r = recv()
-    print("hover f:", r.get("result",{}).get("contents",{}).get("value","null"))
+    hover_f = r["result"]["contents"]["value"]
+    check("hover f shows body", "{[x;y] x+y}" in hover_f)
 
-    send({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.q"},"position":{"line":1,"character":0}}})
+    # ── Hover: global variable ───────────────────────────────
+    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 1, "character": 0}})
     r = recv()
-    print("hover g:", r.get("result",{}).get("contents",{}).get("value","null"))
+    hover_g = r["result"]["contents"]["value"]
+    check("hover g shows global", "(global)" in hover_g)
+    check("hover g shows value", "42" in hover_g)
 
-    send({"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///test.q"},"position":{"line":2,"character":7}}})
+    # ── Hover: no node ───────────────────────────────────────
+    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 99, "character": 0}})
     r = recv()
-    print("def f:", r.get("result"))
+    check("hover empty line returns null", r["result"] is None)
 
-    send({"jsonrpc":"2.0","id":5,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.q"}}})
+    # ── Go to definition ─────────────────────────────────────
+    print("definition")
+    send("textDocument/definition", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 2, "character": 7}})
     r = recv()
-    print("symbols:", [s["name"] for s in r.get("result",[])])
+    defn = r["result"]
+    check("def f has uri", defn["uri"] == "file:///test.q")
+    check("def f points to line 0", defn["range"]["start"]["line"] == 0)
 
-    send({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.q"},"position":{"line":0,"character":0}}})
+    # ── Definition of undefined symbol ───────────────────────
+    send("textDocument/definition", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 2, "character": 0}})
     r = recv()
-    items = r.get("result",[])
-    print("completion count:", len(items))
+    defn_result = r["result"]
+    # "result" is the assignment target — should find it
+    check("def result found", defn_result is not None)
 
-    send({"jsonrpc":"2.0","id":7,"method":"shutdown","params":{}})
-    recv()
-    send({"jsonrpc":"2.0","method":"exit","params":{}})
+    # ── Document symbols ─────────────────────────────────────
+    print("documentSymbol")
+    send("textDocument/documentSymbol", {"textDocument": {"uri": "file:///test.q"}})
+    r = recv()
+    syms = r["result"]
+    sym_names = [s["name"] for s in syms]
+    check("3 symbols", len(syms) == 3)
+    check("f in symbols", "f" in sym_names)
+    check("g :: in symbols", "g ::" in sym_names)
+    check("result in symbols", "result" in sym_names)
+
+    # ── Completion ───────────────────────────────────────────
+    print("completion")
+    send("textDocument/completion", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 0, "character": 0}})
+    r = recv()
+    items = r["result"]
+    labels = [i["label"] for i in items]
+    check("completion has user defs", "f" in labels and "g" in labels)
+    check("completion has builtins", "count" in labels or "select" in labels)
+    check("completion count > 100", len(items) > 100)  # builtins + user defs
+
+    # ── didChange ────────────────────────────────────────────
+    print("didChange")
+    text2 = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]\nh:{neg x}"
+    send("textDocument/didChange", {"textDocument": {"uri": "file:///test.q", "version": 2},
+         "contentChanges": [{"text": text2}]}, notify=True)
+    time.sleep(0.1)
+    send("textDocument/documentSymbol", {"textDocument": {"uri": "file:///test.q"}})
+    r = recv()
+    check("didChange: 4 symbols after edit", len(r["result"]) == 4)
+    check("didChange: h in symbols", "h" in [s["name"] for s in r["result"]])
+
+    # ── didClose ─────────────────────────────────────────────
+    print("didClose")
+    send("textDocument/didClose", {"textDocument": {"uri": "file:///test.q"}}, notify=True)
+    time.sleep(0.1)
+    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 0, "character": 0}})
+    r = recv()
+    check("hover after close returns null", r["result"] is None)
+
+    # ── Shutdown + exit ──────────────────────────────────────
+    print("shutdown")
+    send("shutdown")
+    r = recv()
+    check("shutdown returns null result", r["result"] is None)
+    send("exit", notify=True)
     proc.wait(timeout=2)
+    check("process exited", proc.returncode == 0)
+
+    # ── Summary ──────────────────────────────────────────────
+    print(f"\n{pass_n} passed, {fail_n} failed")
+    if fail_n > 0:
+        sys.exit(1)
     print("all tests passed")
+
 except Exception as e:
     print(f"ERROR: {e}", file=sys.stderr)
     print("stderr:", stderr_lines, file=sys.stderr)
-    proc.kill()
-    sys.exit(1)
+    proc.kill(); sys.exit(1)
