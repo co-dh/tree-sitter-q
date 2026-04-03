@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// q/kdb+ Language Server
+// q/kdb+ Language Server — tree-sitter based
 // Features: go-to-definition, completion, document symbols, hover
 
 import {
@@ -10,6 +10,9 @@ import {
   type Location, type Hover,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import Parser from 'tree-sitter';
+// @ts-ignore — native binding, no types
+import Q from 'tree-sitter-q';
 
 // ── q built-in verbs and keywords ───────────────────────────
 const VERBS: Record<string, string> = {
@@ -68,10 +71,15 @@ interface Def {
   isGlobal: boolean;
 }
 
+// ── Tree-sitter setup ───────────────────────────────────────
+const parser = new Parser();
+parser.setLanguage(Q);
+
 // ── Server setup ────────────────────────────────────────────
 const conn = createConnection(ProposedFeatures.all);
 const docs = new TextDocuments(TextDocument);
 const defsByUri = new Map<string, Def[]>();
+const treesByUri = new Map<string, Parser.Tree>();
 
 conn.onInitialize((): InitializeResult => ({
   capabilities: {
@@ -83,38 +91,43 @@ conn.onInitialize((): InitializeResult => ({
   },
 }));
 
-// ── Analysis: extract definitions ───────────────────────────
-// Matches: name:{...}, name:expr, name::expr
-const ASSIGN_RE = /^(\s*)(\.?[a-zA-Z][a-zA-Z0-9_.]*)\s*(::?)\s*(.*)/;
-const LAMBDA_START = /^\{/;
-const PARAM_RE = /^\{\[([^\]]*)\]/;
+// ── Helpers ─────────────────────────────────────────────────
+function tsToLspRange(node: Parser.SyntaxNode): Range {
+  return Range.create(
+    node.startPosition.row, node.startPosition.column,
+    node.endPosition.row, node.endPosition.column,
+  );
+}
 
-function analyze(uri: string, doc: TextDocument): Def[] {
+function nodeAtPosition(tree: Parser.Tree, pos: Position): Parser.SyntaxNode | null {
+  return tree.rootNode.descendantForPosition({ row: pos.line, column: pos.character });
+}
+
+// ── Analysis: extract definitions from AST ──────────────────
+function analyze(uri: string, tree: Parser.Tree): Def[] {
   const defs: Def[] = [];
-  const lines = doc.getText().split('\n');
+  const root = tree.rootNode;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Skip comments
-    if (/^\s*\//.test(line) || /^\s*$/.test(line)) continue;
+  for (const child of root.children) {
+    if (child.type !== 'assignment' && child.type !== 'global_assignment') continue;
+    const nameNode = child.childForFieldName('name');
+    const valueNode = child.childForFieldName('value');
+    if (!nameNode) continue;
 
-    const m = ASSIGN_RE.exec(line);
-    if (!m) continue;
-    const [, indent, name, colons, rest] = m;
-    const col = indent.length;
-    const isGlobal = colons === '::';
-    const isLambda = LAMBDA_START.test(rest.trim());
-
+    const isGlobal = child.type === 'global_assignment';
+    const isLambda = valueNode?.type === 'lambda';
     let detail: string | undefined;
-    if (isLambda) {
-      const pm = PARAM_RE.exec(rest.trim());
-      detail = pm ? `[${pm[1]}]` : '{...}';
+    if (isLambda && valueNode) {
+      const params = valueNode.children.find(c => c.type === 'params');
+      detail = params
+        ? `[${params.namedChildren.map(p => p.text).join(';')}]`
+        : '{...}';
     }
 
     defs.push({
-      name,
-      range: Range.create(i, col, i, line.length),
-      nameRange: Range.create(i, col, i, col + name.length),
+      name: nameNode.text,
+      range: tsToLspRange(child),
+      nameRange: tsToLspRange(nameNode),
       uri,
       kind: isLambda ? SymbolKind.Function : SymbolKind.Variable,
       detail,
@@ -126,23 +139,27 @@ function analyze(uri: string, doc: TextDocument): Def[] {
 
 // ── Document change handler ─────────────────────────────────
 docs.onDidChangeContent(change => {
-  const defs = analyze(change.document.uri, change.document);
-  defsByUri.set(change.document.uri, defs);
+  const text = change.document.getText();
+  const oldTree = treesByUri.get(change.document.uri);
+  const tree = parser.parse(text, oldTree ?? undefined);
+  treesByUri.set(change.document.uri, tree);
+  defsByUri.set(change.document.uri, analyze(change.document.uri, tree));
 });
 
 docs.onDidClose(change => {
   defsByUri.delete(change.document.uri);
+  treesByUri.delete(change.document.uri);
 });
 
 // ── Go to definition ────────────────────────────────────────
 conn.onDefinition(params => {
-  const doc = docs.get(params.textDocument.uri);
-  if (!doc) return null;
-  const word = getWordAt(doc, params.position);
-  if (!word) return null;
+  const tree = treesByUri.get(params.textDocument.uri);
+  if (!tree) return null;
+  const node = nodeAtPosition(tree, params.position);
+  if (!node || (node.type !== 'identifier' && node.type !== 'dotted_name')) return null;
+  const word = node.text;
 
   const results: Location[] = [];
-  // Search current file first, then others
   const uris = [params.textDocument.uri, ...[...defsByUri.keys()].filter(u => u !== params.textDocument.uri)];
   for (const uri of uris) {
     const defs = defsByUri.get(uri);
@@ -169,22 +186,30 @@ conn.onDocumentSymbol(params => {
 
 // ── Hover ───────────────────────────────────────────────────
 conn.onHover(params => {
-  const doc = docs.get(params.textDocument.uri);
-  if (!doc) return null;
-  const word = getWordAt(doc, params.position);
-  if (!word) return null;
+  const tree = treesByUri.get(params.textDocument.uri);
+  if (!tree) return null;
+  const node = nodeAtPosition(tree, params.position);
+  if (!node) return null;
 
-  if (word in VERBS) return mkHover(`(verb) ${word} — ${VERBS[word]}`);
-  if (word in KEYWORD_OPS) return mkHover(`(keyword) ${word} — ${KEYWORD_OPS[word]}`);
+  // Built-in verb node
+  if (node.type === 'verb') return mkHover(`(verb) ${node.text} — ${VERBS[node.text] ?? ''}`);
+  if (node.type === 'keyword_op') return mkHover(`(keyword) ${node.text} — ${KEYWORD_OPS[node.text] ?? ''}`);
 
-  for (const [, defs] of defsByUri) {
-    for (const d of defs) {
-      if (d.name !== word) continue;
-      const prefix = d.isGlobal ? '(global) ' : '';
-      const sig = d.kind === SymbolKind.Function
-        ? `${prefix}${d.name}:${d.detail || '{...}'}`
-        : `${prefix}${d.name}`;
-      return mkHover(sig);
+  // Identifier — check built-ins, then user defs
+  if (node.type === 'identifier' || node.type === 'dotted_name') {
+    const word = node.text;
+    if (word in VERBS) return mkHover(`(verb) ${word} — ${VERBS[word]}`);
+    if (word in KEYWORD_OPS) return mkHover(`(keyword) ${word} — ${KEYWORD_OPS[word]}`);
+
+    for (const [, defs] of defsByUri) {
+      for (const d of defs) {
+        if (d.name !== word) continue;
+        const prefix = d.isGlobal ? '(global) ' : '';
+        const sig = d.kind === SymbolKind.Function
+          ? `${prefix}${d.name}:${d.detail || '{...}'}`
+          : `${prefix}${d.name}`;
+        return mkHover(sig);
+      }
     }
   }
   return null;
@@ -220,17 +245,6 @@ conn.onCompletion(() => {
 
   return items;
 });
-
-// ── Utility ─────────────────────────────────────────────────
-function getWordAt(doc: TextDocument, pos: Position): string | null {
-  const line = doc.getText(Range.create(pos.line, 0, pos.line + 1, 0));
-  const re = /\.?[a-zA-Z][a-zA-Z0-9_.]*/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(line))) {
-    if (m.index <= pos.character && pos.character <= m.index + m[0].length) return m[0];
-  }
-  return null;
-}
 
 // ── Start ───────────────────────────────────────────────────
 docs.listen(conn);
