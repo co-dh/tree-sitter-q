@@ -23,14 +23,14 @@
                                            │
               ┌────────────────────────────┬┴───────────────────────────┐
               │                            │                            │
-    ┌─────────┴──────────┐   ┌─────────────┴───────────┐  ┌────────────┴──────────┐
-    │   Document State   │   │      Handlers           │  │    Builtins           │
+    ┌─────────┴──────────┐   ┌─────────────┴────────────┐  ┌────────────┴──────────┐
+    │   Document State   │   │      Handlers            │  │    Builtins           │
     │                    │   │                          │  │                       │
-    │ .lsp.docs:         │   │ hInit     → capabilities │  │ .Q.res → reserved    │
-    │   uri → (text      │   │ hDef      → go-to-def    │  │ key `.q → stdlib     │
+    │ .lsp.docs:         │   │ hInit     → capabilities │  │ .Q.res → reserved     │
+    │   uri → (text      │   │ hDef      → go-to-def    │  │ key `.q → stdlib      │
     │          tree_h    │   │ hHover    → hover info   │  │                       │
     │          defs_tbl) │   │ hCompletion → items      │  │ builtinDoc:           │
-    │                    │   │ hSymbols  → symbol list  │  │   .Q.s1 .q w         │
+    │                    │   │ hSymbols  → symbol list  │  │   .Q.s1 .q w          │
     │ updateDoc: parse   │   │                          │  │   (k implementation)  │
     │   + extract defs   │   │                          │  │                       │
     │ closeDoc: free     │   │                          │  │                       │
@@ -43,11 +43,11 @@
     │    ts_q.so  (C bridge)      │
     │                             │
     │  ts_parse[text] → tree_h    │
-    │  ts_defs[h;text] → table   │
-    │  ts_node_at[h;t;r;c] → dict│
+    │  ts_defs[h;text] → table    │
+    │  ts_node_at[h;t;r;c] → dict │
     │  ts_free[h]                 │
-    │  stdin_read[n] → bytes     │
-    │  stdin_line[] → string     │
+    │  stdin_read[n] → bytes      │
+    │  stdin_line[] → string      │
     └──────────────┬──────────────┘
                    │ links
                    ▼
