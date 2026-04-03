@@ -60,11 +60,6 @@ nodeat:{[uri;line;col]
   nd:ts_node_at[doc 1;doc 0;line;col];
   $[99h=type nd;nd;(::)]}
 
-parentat:{[uri;line;col]
-  doc:.lsp.docs `$uri;
-  if[(::)~doc; :(::)];
-  ts_parent[doc 1;doc 0;line;col]}
-
 / ── LSP I/O ──────────────────────────────────────────────────
 / Read Content-Length header, then exact byte body
 readmsg:{

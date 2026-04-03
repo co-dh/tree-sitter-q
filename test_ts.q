@@ -8,8 +8,8 @@ ts_children:`ts_q 2: (`ts_children;2);
 ts_node_at:`ts_q 2: (`ts_node_at;4);
 ts_parent:`ts_q 2: (`ts_parent;4);
 
-pass:0; fail:0;
-assert:{[msg;cond] $[cond;[pass+:1;-1 "  pass: ",msg];[fail+:1;-2 "  FAIL: ",msg]]}
+npass:0; nfail:0;
+assert:{[msg;cond] $[cond;[npass+:1;-1 "  pass: ",msg];[nfail+:1;-2 "  FAIL: ",msg]]}
 
 / ── ts_init ──────────────────────────────────────────────────
 -1 "ts_init";
@@ -79,7 +79,7 @@ ts_free h3;
 
 / ── Summary ──────────────────────────────────────────────────
 -1 "";
--1 (string pass)," passed, ",(string fail)," failed";
-if[fail>0; exit 1];
+-1 (string npass)," passed, ",(string nfail)," failed";
+if[nfail>0; exit 1];
 -1 "all tests passed";
 \\

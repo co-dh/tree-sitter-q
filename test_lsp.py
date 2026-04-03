@@ -5,11 +5,19 @@ import subprocess, json, sys, threading, time
 proc = subprocess.Popen(["q", "lsp.q", "-q"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         cwd=sys.path[0] or ".")
 
+URI = "file:///test.q"
+def td(**kw): return {"textDocument": {"uri": URI, **kw}}
+
 stderr_lines = []
 def read_stderr():
     for line in proc.stderr:
         stderr_lines.append(line.decode().rstrip())
 threading.Thread(target=read_stderr, daemon=True).start()
+
+def _die(reason):
+    print(reason, file=sys.stderr)
+    print("stderr:", stderr_lines, file=sys.stderr)
+    proc.kill(); sys.exit(1)
 
 seq = 0
 def send(method, params=None, notify=False):
@@ -28,15 +36,9 @@ def recv(timeout=5):
     deadline = time.time() + timeout
     buf = b""
     while True:
-        if time.time() > deadline:
-            print("TIMEOUT", file=sys.stderr)
-            print("stderr:", stderr_lines, file=sys.stderr)
-            proc.kill(); sys.exit(1)
+        if time.time() > deadline: _die("TIMEOUT")
         c = proc.stdout.read(1)
-        if not c:
-            print("EOF", file=sys.stderr)
-            print("stderr:", stderr_lines, file=sys.stderr)
-            proc.kill(); sys.exit(1)
+        if not c: _die("EOF")
         if c == b"\n":
             line = buf.rstrip(b"\r")
             buf = b""
@@ -71,81 +73,91 @@ try:
 
     # ── Open document ────────────────────────────────────────
     print("didOpen")
-    text = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]"
-    send("textDocument/didOpen", {"textDocument": {"uri": "file:///test.q", "languageId": "q", "version": 1, "text": text}}, notify=True)
+    text = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]\nn:count result"
+    send("textDocument/didOpen", {**td(languageId="q", version=1, text=text)}, notify=True)
     time.sleep(0.1)  # let server process
 
     # ── Hover: user-defined function ─────────────────────────
     print("hover")
-    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 0, "character": 0}})
+    send("textDocument/hover", {**td(), "position": {"line": 0, "character": 0}})
     r = recv()
     hover_f = r["result"]["contents"]["value"]
     check("hover f shows body", "{[x;y] x+y}" in hover_f)
 
     # ── Hover: global variable ───────────────────────────────
-    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 1, "character": 0}})
+    send("textDocument/hover", {**td(), "position": {"line": 1, "character": 0}})
     r = recv()
     hover_g = r["result"]["contents"]["value"]
     check("hover g shows global", "(global)" in hover_g)
     check("hover g shows value", "42" in hover_g)
 
+    # ── Hover: builtin identifier (count) ──────────────────────
+    send("textDocument/hover", {**td(), "position": {"line": 3, "character": 2}})
+    r = recv()
+    hover_count = r["result"]["contents"]["value"]
+    check("hover builtin has content", len(hover_count) > 0)
+
+    # ── Hover: verb (count) ────────────────────────────────
+    send("textDocument/hover", {**td(), "position": {"line": 3, "character": 2}})
+    r = recv()
+    hover_verb = r["result"]["contents"]["value"]
+    check("hover verb shows k impl", len(hover_verb) > 0 and hover_verb != "count")
+
     # ── Hover: no node ───────────────────────────────────────
-    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 99, "character": 0}})
+    send("textDocument/hover", {**td(), "position": {"line": 99, "character": 0}})
     r = recv()
     check("hover empty line returns null", r["result"] is None)
 
     # ── Go to definition ─────────────────────────────────────
     print("definition")
-    send("textDocument/definition", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 2, "character": 7}})
+    send("textDocument/definition", {**td(), "position": {"line": 2, "character": 7}})
     r = recv()
     defn = r["result"]
-    check("def f has uri", defn["uri"] == "file:///test.q")
+    check("def f has uri", defn["uri"] == URI)
     check("def f points to line 0", defn["range"]["start"]["line"] == 0)
 
     # ── Definition of undefined symbol ───────────────────────
-    send("textDocument/definition", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 2, "character": 0}})
+    send("textDocument/definition", {**td(), "position": {"line": 2, "character": 0}})
     r = recv()
-    defn_result = r["result"]
-    # "result" is the assignment target — should find it
-    check("def result found", defn_result is not None)
+    check("def result found", r["result"] is not None)
 
     # ── Document symbols ─────────────────────────────────────
     print("documentSymbol")
-    send("textDocument/documentSymbol", {"textDocument": {"uri": "file:///test.q"}})
+    send("textDocument/documentSymbol", td())
     r = recv()
     syms = r["result"]
     sym_names = [s["name"] for s in syms]
-    check("3 symbols", len(syms) == 3)
+    check("4 symbols", len(syms) == 4)
     check("f in symbols", "f" in sym_names)
     check("g :: in symbols", "g ::" in sym_names)
     check("result in symbols", "result" in sym_names)
+    check("n in symbols", "n" in sym_names)
 
     # ── Completion ───────────────────────────────────────────
     print("completion")
-    send("textDocument/completion", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 0, "character": 0}})
+    send("textDocument/completion", {**td(), "position": {"line": 0, "character": 0}})
     r = recv()
     items = r["result"]
     labels = [i["label"] for i in items]
     check("completion has user defs", "f" in labels and "g" in labels)
     check("completion has builtins", "count" in labels or "select" in labels)
-    check("completion count > 100", len(items) > 100)  # builtins + user defs
+    check("completion count > 100", len(items) > 100)
 
     # ── didChange ────────────────────────────────────────────
     print("didChange")
-    text2 = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]\nh:{neg x}"
-    send("textDocument/didChange", {"textDocument": {"uri": "file:///test.q", "version": 2},
-         "contentChanges": [{"text": text2}]}, notify=True)
+    text2 = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]\nn:count result\nh:{neg x}"
+    send("textDocument/didChange", {**td(version=2), "contentChanges": [{"text": text2}]}, notify=True)
     time.sleep(0.1)
-    send("textDocument/documentSymbol", {"textDocument": {"uri": "file:///test.q"}})
+    send("textDocument/documentSymbol", td())
     r = recv()
-    check("didChange: 4 symbols after edit", len(r["result"]) == 4)
+    check("didChange: 5 symbols after edit", len(r["result"]) == 5)
     check("didChange: h in symbols", "h" in [s["name"] for s in r["result"]])
 
     # ── didClose ─────────────────────────────────────────────
     print("didClose")
-    send("textDocument/didClose", {"textDocument": {"uri": "file:///test.q"}}, notify=True)
+    send("textDocument/didClose", td(), notify=True)
     time.sleep(0.1)
-    send("textDocument/hover", {"textDocument": {"uri": "file:///test.q"}, "position": {"line": 0, "character": 0}})
+    send("textDocument/hover", {**td(), "position": {"line": 0, "character": 0}})
     r = recv()
     check("hover after close returns null", r["result"] is None)
 
@@ -165,6 +177,4 @@ try:
     print("all tests passed")
 
 except Exception as e:
-    print(f"ERROR: {e}", file=sys.stderr)
-    print("stderr:", stderr_lines, file=sys.stderr)
-    proc.kill(); sys.exit(1)
+    _die(f"ERROR: {e}")
