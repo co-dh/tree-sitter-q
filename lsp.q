@@ -135,10 +135,9 @@ hHover:{[id;p]
   nd:nodeat[uri;line;col];
   if[(::)~nd; :respond[id;(::)]];
   tp:nd`type; txt:nd`text;
-  if[tp~`verb;
-    :respond[id;mkhover["(verb) ",txt]]];
-  if[tp~`keyword_op;
-    :respond[id;mkhover["(keyword) ",txt]]];
+  if[tp in `verb`keyword_op;
+    ws:`$txt;
+    :respond[id;mkhover $[ws in 1_ key `.q;.Q.s1 .q ws;txt]]];
   if[tp in `identifier`dotted_name;
     ws:`$txt;
     if[ws in builtins;
