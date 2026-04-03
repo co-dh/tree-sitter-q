@@ -243,30 +243,14 @@ K ts_defs(K h, K text) {
     memcpy(nbuf, src + nsb, nlen);
     nbuf[nlen] = 0;
 
-    // Get value field — check if lambda
+    // Get value field — check if lambda, extract full value text
     TSNode val_node = ts_node_child_by_field_name(child, "value", 5);
     int is_lambda = 0;
-    char detail[256] = "";
+    uint32_t vsb = 0, veb = 0;
     if (!ts_node_is_null(val_node)) {
       is_lambda = strcmp(ts_node_type(val_node), "lambda") == 0;
-      if (is_lambda) {
-        // Look for params child
-        uint32_t vc = ts_node_named_child_count(val_node);
-        for (uint32_t j = 0; j < vc; j++) {
-          TSNode vc_node = ts_node_named_child(val_node, j);
-          if (strcmp(ts_node_type(vc_node), "params") == 0) {
-            uint32_t psb = ts_node_start_byte(vc_node);
-            uint32_t peb = ts_node_end_byte(vc_node);
-            // params includes [...]
-            uint32_t plen = peb - psb;
-            if (plen >= sizeof(detail)) plen = sizeof(detail) - 1;
-            memcpy(detail, src + psb, plen);
-            detail[plen] = 0;
-            break;
-          }
-        }
-        if (!detail[0]) strcpy(detail, "{...}");
-      }
+      vsb = ts_node_start_byte(val_node);
+      veb = ts_node_end_byte(val_node);
     }
 
     TSPoint sp = ts_node_start_point(name_node);
@@ -278,8 +262,9 @@ K ts_defs(K h, K text) {
     ja(&erows, &er); ja(&ecols, &ec);
     G gl=(G)is_global, lm=(G)is_lambda;
     ja(&globals, &gl); ja(&lambdas, &lm);
-    K dtl = ktn(KC, strlen(detail));
-    memcpy(kC(dtl), detail, strlen(detail));
+    uint32_t vlen = veb - vsb;
+    K dtl = ktn(KC, vlen);
+    if (vlen) memcpy(kC(dtl), src + vsb, vlen);
     jk(&details, dtl);
   }
 

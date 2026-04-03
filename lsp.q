@@ -18,10 +18,9 @@ ts_init[];
 / ── Built-in docs from q itself ──────────────────────────────
 / .Q.res = reserved words, key `.q = stdlib functions
 builtins:(.Q.res,1_ key `.q) except `;
-builtin_doc:{[w] / returns description or ""
-  s:string w;
-  if[w in .Q.res; :"(reserved) ",s];
-  if[w in key `.q; :"(builtin) ",s];
+builtin_doc:{[w]
+  if[w in 1_ key `.q; :.Q.s1 .q w];
+  if[w in .Q.res; :"(reserved) ",string w];
   ""}
 
 / ── Document state ───────────────────────────────────────────
@@ -147,7 +146,7 @@ hHover:{[id;p]
     h:finddef ws;
     if[not (::)~h;
       pfx:$[h`global;"(global) ";""];
-      sig:$[h`lambda;pfx,(string h`name),":",h`detail;pfx,string h`name];
+      sig:pfx,(string h`name),":",$[0<count h`detail;h`detail;string h`name];
       :respond[id;mkhover sig]]];
   respond[id;(::)]}
 
