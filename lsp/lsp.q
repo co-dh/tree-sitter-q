@@ -57,6 +57,9 @@ closeDoc:{[uri]
     ; if[su in key .lsp.docs; ts_free .lsp.docs[su] 1]
     ; .lsp.docs _:su}
 
+/ parse or passthrough on error (used by formatter to verify round-trip)
+qp:{@[parse;x;{[e;x] x}[;x]]}
+
 / ── Helpers ──────────────────────────────────────────────────
 / Build LSP Range object from row/col pairs
 mkRange:{[sr;sc;er;ec]
@@ -139,15 +142,16 @@ handle:{[msg]
         ; m~"textDocument/selectionRange";   hSelectionRange[id;p]
         ; m~"textDocument/semanticTokens/full";hSemanticTokensFull[id;p]
         ; m~"textDocument/codeAction";       hCodeAction[id;p]
+        ; m~"textDocument/formatting";       hFormatting[id;p]
         ; not null id;               respond[id;(::)]  / unknown request → null
         ; (::)]}
 
 / textDocumentSync=1 means full document sync (client sends entire text on change)
 hInit:{[id]
   respond[id;`capabilities`serverInfo!(
-    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider`documentHighlightProvider`foldingRangeProvider`workspaceSymbolProvider`selectionRangeProvider`semanticTokensProvider`codeActionProvider!
-      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b;1b;1b;1b;1b;`full`legend!(1b;semanticLegend);1b);
-    `name`version!("q-lsp";"0.5.0"))]}
+    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider`documentHighlightProvider`foldingRangeProvider`workspaceSymbolProvider`selectionRangeProvider`semanticTokensProvider`codeActionProvider`documentFormattingProvider!
+      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b;1b;1b;1b;1b;`full`legend!(1b;semanticLegend);1b;1b);
+    `name`version!("q-lsp";"0.6.0"))]}
 
 / Go-to-definition: search all open documents for a matching assignment
 hDef:{[id;p]
@@ -338,6 +342,34 @@ hSemanticTokensFull:{[id;p]
     ; dc:?[dl>0;toks`col;deltas toks`col]
     ; data:raze flip (dl;dc;toks`len;toks`tokenType;toks`tokenModifiers)
     ; respond[id;(enlist`data)!enlist data]}
+
+/ Formatting: strip trailing whitespace, collapse blank lines, ensure trailing newline
+hFormatting:{[id;p]
+    ; uri:p[`textDocument]`uri; su:`$uri
+    ; doc:.lsp.docs su
+    ; if[(::)~doc; :respond[id;()]]
+    ; text:doc 0
+    ; lines:"\n" vs text
+    ; lines:rtrim each lines                                                     / strip trailing ws
+    / Collapse 2+ consecutive blank lines into 1
+    ; r:(); pb:0b; i:0
+    ; while[i<count lines;
+        blank:0=count lines i
+        ; if[not[blank] or not pb; r,:enlist lines i]
+        ; pb:blank; i+:1]
+    / Ensure trailing newline
+    ; if[(0<count r) and 0<count last r; r,:enlist ""]
+    ; new:"\n" sv r
+    ; if[new~text; :respond[id;()]]
+    / Round-trip: compare q parse trees of each top-level statement
+    ; h2:ts_parse new
+    ; ch1:ts_children[doc 1;text]; ch2:ts_children[h2;new]
+    ; ts_free h2
+    ; if[not (count ch1)=count ch2; :respond[id;()]]
+    ; if[not all {(qp x`text)~qp y`text}'[ch1;ch2]; :respond[id;()]]
+    ; nlines:count lines
+    ; ncols:$[nlines>0;count last lines;0]
+    ; respond[id;enlist `range`newText!(mkRange[0;0;nlines;ncols];new)]}
 
 / Code actions: suggest fixes for parse errors (missing tokens)
 hCodeAction:{[id;p]

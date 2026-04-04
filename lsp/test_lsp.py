@@ -92,6 +92,7 @@ try:
     check("has selectionRangeProvider", caps.get("selectionRangeProvider"))
     check("has semanticTokensProvider", "semanticTokensProvider" in caps)
     check("has codeActionProvider", caps.get("codeActionProvider"))
+    check("has documentFormattingProvider", caps.get("documentFormattingProvider"))
     check("serverInfo name", r["result"]["serverInfo"]["name"] == "q-lsp")
     send("initialized", notify=True)
 
@@ -343,6 +344,39 @@ try:
     else:
         check("codeAction empty for non-missing errors", True)
     send("textDocument/didClose", {"textDocument": {"uri": ca_uri}}, notify=True)
+    time.sleep(0.1)
+    _notifs.clear()
+
+    # ── Formatting ───────────────────────────────────────────
+    print("formatting")
+    fmt_uri = "file:///fmt.q"
+    fmt_text = "f:{x+y}   \n\n\n\ng:42  \n"
+    send("textDocument/didOpen", {"textDocument": {"uri": fmt_uri, "languageId": "q",
+         "version": 1, "text": fmt_text}}, notify=True)
+    time.sleep(0.1)
+    send("textDocument/formatting", {"textDocument": {"uri": fmt_uri},
+         "options": {"tabSize": 2, "insertSpaces": True}})
+    r = recv()
+    edits = r["result"]
+    check("formatting returns edits", len(edits) > 0)
+    check("formatting edit has range", "range" in edits[0])
+    check("formatting edit has newText", "newText" in edits[0])
+    new_text = edits[0]["newText"]
+    check("formatting strips trailing ws", "   " not in new_text)
+    check("formatting collapses blank lines", "\n\n\n" not in new_text)
+    check("formatting has trailing newline", new_text.endswith("\n"))
+
+    # Already clean text returns empty edits
+    fmt2_uri = "file:///fmt2.q"
+    send("textDocument/didOpen", {"textDocument": {"uri": fmt2_uri, "languageId": "q",
+         "version": 1, "text": "f:{x+y}\ng:42\n"}}, notify=True)
+    time.sleep(0.1)
+    send("textDocument/formatting", {"textDocument": {"uri": fmt2_uri},
+         "options": {"tabSize": 2, "insertSpaces": True}})
+    r = recv()
+    check("formatting clean text returns empty", r["result"] == [])
+    send("textDocument/didClose", {"textDocument": {"uri": fmt_uri}}, notify=True)
+    send("textDocument/didClose", {"textDocument": {"uri": fmt2_uri}}, notify=True)
     time.sleep(0.1)
     _notifs.clear()
 

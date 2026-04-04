@@ -1,0 +1,16 @@
+<h1>404 &ndash; Page Not found. Visit <a href="http://code.kx.com">code.kx.com</a></h1>
+  <!--
+  <p>Sorry, that’s all we know. You might want:</p>
+  <h2><a href="https://code.kx.com/q/">q and kdb+</a></h2>
+  <ul>
+    <li><a href="https://code.kx.com/q/ref/">Reference</a> for the q language</li>
+    <li><a href="https://code.kx.com/q/basics/datatypes/">Datatypes</a> in q and kdb+</li>
+    <li><a href="https://code.kx.com/q4m3/"><cite>Q for Mortals</cite></a> Version 3</li>
+  </ul>
+  <h2><a href="https://code.kx.com/home/">Documentation for KX products</a></h2>
+  <ul>
+    <li><a href="https://code.kx.com/insights/">KX Insights</a></li>
+    <li><a href="https://code.kx.com/dashboards/">KX Dashboards</a></li>
+    <li><a href="https://code.kx.com/developer/">KX Developer</a></li>
+  </ul>
+  -->
