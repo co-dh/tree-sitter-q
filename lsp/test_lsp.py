@@ -31,7 +31,8 @@ def send(method, params=None, notify=False):
     proc.stdin.flush()
     return None if notify else seq
 
-def recv(timeout=5):
+_notifs = []
+def _recv_msg(timeout=5):
     headers = {}
     deadline = time.time() + timeout
     buf = b""
@@ -48,6 +49,21 @@ def recv(timeout=5):
         else:
             buf += c
     return json.loads(proc.stdout.read(headers["cl"]))
+
+def recv(timeout=5):
+    """Read next response (has id). Buffer any notifications."""
+    deadline = time.time() + timeout
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0: _die("TIMEOUT waiting for response")
+        msg = _recv_msg(remaining)
+        if "id" in msg: return msg
+        _notifs.append(msg)
+
+def recv_notif(timeout=2):
+    """Return next notification (buffered or from wire)."""
+    if _notifs: return _notifs.pop(0)
+    return _recv_msg(timeout)
 
 pass_n = 0; fail_n = 0
 def check(name, cond):
@@ -68,6 +84,8 @@ try:
     check("has definitionProvider", caps.get("definitionProvider"))
     check("has hoverProvider", caps.get("hoverProvider"))
     check("has documentSymbolProvider", caps.get("documentSymbolProvider"))
+    check("has referencesProvider", caps.get("referencesProvider"))
+    check("has renameProvider", "renameProvider" in caps)
     check("serverInfo name", r["result"]["serverInfo"]["name"] == "q-lsp")
     send("initialized", notify=True)
 
@@ -75,7 +93,7 @@ try:
     print("didOpen")
     text = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]\nn:count result"
     send("textDocument/didOpen", {**td(languageId="q", version=1, text=text)}, notify=True)
-    time.sleep(0.1)  # let server process
+    time.sleep(0.1)
 
     # ── Hover: user-defined function ─────────────────────────
     print("hover")
@@ -143,6 +161,46 @@ try:
     check("completion has builtins", "count" in labels or "select" in labels)
     check("completion count > 100", len(items) > 100)
 
+    # ── References ───────────────────────────────────────────
+    print("references")
+    send("textDocument/references", {**td(), "position": {"line": 0, "character": 0},
+         "context": {"includeDeclaration": True}})
+    r = recv()
+    refs = r["result"]
+    check("refs f has 2 hits", len(refs) == 2)
+    check("refs f all same uri", all(ref["uri"] == URI for ref in refs))
+
+    send("textDocument/references", {**td(), "position": {"line": 0, "character": 9},
+         "context": {"includeDeclaration": True}})
+    r = recv()
+    check("refs x has 2 hits", len(r["result"]) == 2)  # x in [x;y] + x in x+y
+
+    send("textDocument/references", {**td(), "position": {"line": 99, "character": 0},
+         "context": {"includeDeclaration": True}})
+    r = recv()
+    check("refs unknown returns empty", r["result"] == [])
+
+    # ── Prepare Rename ───────────────────────────────────────
+    print("prepareRename")
+    send("textDocument/prepareRename", {**td(), "position": {"line": 0, "character": 0}})
+    r = recv()
+    check("prepareRename f has range", "range" in r["result"])
+    check("prepareRename f placeholder", r["result"]["placeholder"] == "f")
+
+    send("textDocument/prepareRename", {**td(), "position": {"line": 3, "character": 2}})
+    r = recv()
+    check("prepareRename builtin null", r["result"] is None)
+
+    # ── Rename ───────────────────────────────────────────────
+    print("rename")
+    send("textDocument/rename", {**td(), "position": {"line": 0, "character": 0}, "newName": "add"})
+    r = recv()
+    changes = r["result"]["changes"]
+    check("rename has changes", URI in changes)
+    edits = changes[URI]
+    check("rename f->add 2 edits", len(edits) == 2)
+    check("rename newText", all(e["newText"] == "add" for e in edits))
+
     # ── didChange ────────────────────────────────────────────
     print("didChange")
     text2 = "f:{[x;y] x+y}\ng::42\nresult:f[1;2]\nn:count result\nh:{neg x}"
@@ -153,8 +211,30 @@ try:
     check("didChange: 5 symbols after edit", len(r["result"]) == 5)
     check("didChange: h in symbols", "h" in [s["name"] for s in r["result"]])
 
+    # ── Diagnostics ──────────────────────────────────────────
+    print("diagnostics")
+    _notifs.clear()
+    bad_uri = "file:///bad.q"
+    send("textDocument/didOpen", {"textDocument": {"uri": bad_uri, "languageId": "q",
+         "version": 1, "text": "f:{[x] x+"}}, notify=True)
+    r = recv_notif()
+    check("diag method", r["method"] == "textDocument/publishDiagnostics")
+    check("diag has errors", len(r["params"]["diagnostics"]) > 0)
+    check("diag severity", r["params"]["diagnostics"][0]["severity"] == 1)
+    check("diag source", r["params"]["diagnostics"][0]["source"] == "tree-sitter")
+
+    send("textDocument/didChange", {"textDocument": {"uri": bad_uri, "version": 2},
+         "contentChanges": [{"text": "f:{[x] x+1}"}]}, notify=True)
+    r = recv_notif()
+    check("diag cleared after fix", len(r["params"]["diagnostics"]) == 0)
+
+    send("textDocument/didClose", {"textDocument": {"uri": bad_uri}}, notify=True)
+    r = recv_notif()
+    check("close clears diag", len(r["params"]["diagnostics"]) == 0)
+
     # ── didClose ─────────────────────────────────────────────
     print("didClose")
+    _notifs.clear()
     send("textDocument/didClose", td(), notify=True)
     time.sleep(0.1)
     send("textDocument/hover", {**td(), "position": {"line": 0, "character": 0}})

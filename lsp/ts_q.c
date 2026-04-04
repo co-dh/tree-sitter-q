@@ -285,3 +285,130 @@ K ts_defs(K h, K text) {
 
   return xT(xD(colnames, vals));
 }
+
+// ── References ──────────────────────────────────────────────
+// ts_refs[handle;text;name] — find all identifier/dotted_name nodes matching name
+// Returns table: (srow;scol;erow;ecol)
+K ts_refs(K h, K text, K name) {
+  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
+  if (text->t != KC) return krr("type");
+  if (name->t != KC && name->t != -KC) return krr("ts_refs: expected string name");
+  TSTree *tree = (TSTree*)toJ(h);
+  if (!tree) return krr("null tree");
+
+  TSNode root = ts_tree_root_node(tree);
+  const char *src = (const char*)kC(text);
+  const char *tgt; J tgt_len;
+  if (name->t == KC) { tgt = (const char*)kC(name); tgt_len = name->n; }
+  else { tgt = (const char*)&name->g; tgt_len = 1; }
+
+  K srows = ktn(KJ, 0), scols = ktn(KJ, 0);
+  K erows = ktn(KJ, 0), ecols = ktn(KJ, 0);
+
+  TSTreeCursor cursor = ts_tree_cursor_new(root);
+  int done = 0;
+  while (!done) {
+    TSNode node = ts_tree_cursor_current_node(&cursor);
+    if (ts_node_is_named(node)) {
+      const char *type = ts_node_type(node);
+      if (strcmp(type, "identifier") == 0 || strcmp(type, "dotted_name") == 0) {
+        uint32_t sb = ts_node_start_byte(node);
+        uint32_t eb = ts_node_end_byte(node);
+        if ((J)(eb - sb) == tgt_len && memcmp(src + sb, tgt, tgt_len) == 0) {
+          TSPoint sp = ts_node_start_point(node);
+          TSPoint ep = ts_node_end_point(node);
+          J sr = sp.row, sc = sp.column, er = ep.row, ec = ep.column;
+          ja(&srows, &sr); ja(&scols, &sc);
+          ja(&erows, &er); ja(&ecols, &ec);
+        }
+      }
+    }
+    if (ts_tree_cursor_goto_first_child(&cursor)) continue;
+    while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
+      if (!ts_tree_cursor_goto_parent(&cursor)) { done = 1; break; }
+    }
+  }
+  ts_tree_cursor_delete(&cursor);
+
+  K colnames = ktn(KS, 4);
+  kS(colnames)[0] = ss("srow"); kS(colnames)[1] = ss("scol");
+  kS(colnames)[2] = ss("erow"); kS(colnames)[3] = ss("ecol");
+  K vals = ktn(0, 4);
+  kK(vals)[0] = srows; kK(vals)[1] = scols;
+  kK(vals)[2] = erows; kK(vals)[3] = ecols;
+  return xT(xD(colnames, vals));
+}
+
+// ── Errors ──────────────────────────────────────────────────
+// ts_errors[handle;text] — find ERROR and MISSING nodes in parse tree
+// Returns table: (srow;scol;erow;ecol;msg)
+K ts_errors(K h, K text) {
+  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
+  if (text->t != KC) return krr("type");
+  TSTree *tree = (TSTree*)toJ(h);
+  if (!tree) return krr("null tree");
+
+  TSNode root = ts_tree_root_node(tree);
+  const char *src = (const char*)kC(text);
+  J src_len = text->n;
+
+  K srows = ktn(KJ, 0), scols = ktn(KJ, 0);
+  K erows = ktn(KJ, 0), ecols = ktn(KJ, 0);
+  K msgs = ktn(0, 0);
+
+  TSTreeCursor cursor = ts_tree_cursor_new(root);
+  int done = 0;
+  while (!done) {
+    TSNode node = ts_tree_cursor_current_node(&cursor);
+    int is_err = ts_node_is_error(node);
+    int is_miss = ts_node_is_missing(node);
+    int skip_children = 0;
+
+    if (is_err || is_miss) {
+      TSPoint sp = ts_node_start_point(node);
+      TSPoint ep = ts_node_end_point(node);
+      J sr = sp.row, sc = sp.column, er = ep.row, ec = ep.column;
+      ja(&srows, &sr); ja(&scols, &sc);
+      ja(&erows, &er); ja(&ecols, &ec);
+
+      if (is_miss) {
+        const char *type = ts_node_type(node);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "missing %s", type);
+        J mlen = strlen(buf);
+        K msg = ktn(KC, mlen);
+        memcpy(kC(msg), buf, mlen);
+        jk(&msgs, msg);
+      } else {
+        uint32_t sb = ts_node_start_byte(node);
+        uint32_t eb = ts_node_end_byte(node);
+        uint32_t len = eb - sb;
+        if (len > 60) len = 60;
+        if (sb + len > (uint32_t)src_len) len = (uint32_t)src_len - sb;
+        const char *pfx = "unexpected: ";
+        J plen = strlen(pfx);
+        K msg = ktn(KC, plen + len);
+        memcpy(kC(msg), pfx, plen);
+        if (len) memcpy(kC(msg) + plen, src + sb, len);
+        jk(&msgs, msg);
+      }
+      if (is_err) skip_children = 1;
+    }
+
+    if (!skip_children && ts_tree_cursor_goto_first_child(&cursor)) continue;
+    while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
+      if (!ts_tree_cursor_goto_parent(&cursor)) { done = 1; break; }
+    }
+  }
+  ts_tree_cursor_delete(&cursor);
+
+  K colnames = ktn(KS, 5);
+  kS(colnames)[0] = ss("srow"); kS(colnames)[1] = ss("scol");
+  kS(colnames)[2] = ss("erow"); kS(colnames)[3] = ss("ecol");
+  kS(colnames)[4] = ss("msg");
+  K vals = ktn(0, 5);
+  kK(vals)[0] = srows; kK(vals)[1] = scols;
+  kK(vals)[2] = erows; kK(vals)[3] = ecols;
+  kK(vals)[4] = msgs;
+  return xT(xD(colnames, vals));
+}

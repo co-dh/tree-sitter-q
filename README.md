@@ -1,7 +1,7 @@
 # tree-sitter-q
 
 Tree-sitter grammar for the q/kdb+ programming language. Provides syntax highlighting and an LSP server with
-go-to-definition, hover, completion, and document symbols.
+go-to-definition, hover, completion, document symbols, find references, rename, and diagnostics.
 
 ## Helix
 
@@ -32,7 +32,8 @@ Verify with `helix --health q` — should show parser and highlights as green.
 ## LSP (optional, requires q)
 
 The LSP server is written in q and uses tree-sitter via a C bridge (`2:` FFI). It provides hover (shows function bodies
-and k implementations for builtins), go-to-definition, completion, and document symbols.
+and k implementations for builtins), go-to-definition, completion, document symbols, find references, rename, and
+diagnostics (parse errors).
 
 ### Prerequisites
 

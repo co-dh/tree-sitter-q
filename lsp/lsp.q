@@ -1,5 +1,5 @@
 / q/kdb+ Language Server — powered by tree-sitter
-/ Features: go-to-definition, completion, document symbols, hover
+/ Features: go-to-definition, completion, document symbols, hover, references, rename, diagnostics
 / Protocol: LSP JSON-RPC over stdio (Content-Length framing)
 / Usage: q lsp.q -q
 / Configure in editor to launch this as a language server.
@@ -16,6 +16,8 @@ ts_free:    tso 2: (`ts_free;1)
 ts_defs:    tso 2: (`ts_defs;2)
 ts_node_at: tso 2: (`ts_node_at;4)
 ts_parent:  tso 2: (`ts_parent;4)
+ts_refs:    tso 2: (`ts_refs;3)
+ts_errors:  tso 2: (`ts_errors;2)
 stdin_read: tso 2: (`stdin_read;1)
 stdin_line: tso 2: (`stdin_line;1)
 ts_init[];
@@ -43,10 +45,12 @@ updateDoc:{[uri;text]
     ; if[su in key .lsp.docs; ts_free .lsp.docs[su] 1]  / free old tree
     ; h:ts_parse text
     ; d:ts_defs[h;text]
-    ; .lsp.docs[su]:(text;h;d)}
+    ; .lsp.docs[su]:(text;h;d)
+    ; publishDiag[uri]}
 
 closeDoc:{[uri]
     ; su:`$uri
+    ; notify["textDocument/publishDiagnostics";`uri`diagnostics!(uri;())]
     ; if[su in key .lsp.docs; ts_free .lsp.docs[su] 1]
     ; .lsp.docs _:su}
 
@@ -92,7 +96,18 @@ writeMsg:{[msg]
     ; 1 "Content-Length: ",(string count body),"\r\n\r\n",body}
 
 respond:{[id;result] writeMsg `jsonrpc`id`result!("2.0";id;result)}
+notify:{[method;params] writeMsg `jsonrpc`method`params!("2.0";method;params)}
 mkHover:{[txt] (enlist`contents)!enlist `kind`value!("plaintext";txt)}
+
+/ Publish parse errors as diagnostics (called after every document update)
+publishDiag:{[uri]
+    ; su:`$uri
+    ; if[not su in key .lsp.docs; :(::)]
+    ; doc:.lsp.docs su
+    ; errs:ts_errors[doc 1;doc 0]
+    ; diags:{`range`severity`message`source!(
+        mkRange[x`srow;x`scol;x`erow;x`ecol];1;x`msg;"tree-sitter")} each errs
+    ; notify["textDocument/publishDiagnostics";`uri`diagnostics!(uri;diags)]}
 
 / ── Handlers ─────────────────────────────────────────────────
 / Dispatch incoming LSP message by method name.
@@ -112,15 +127,18 @@ handle:{[msg]
         ; m~"textDocument/hover";      hHover[id;p]
         ; m~"textDocument/completion"; hCompletion[id;p]
         ; m~"textDocument/documentSymbol"; hSymbols[id;p]
+        ; m~"textDocument/references";     hRefs[id;p]
+        ; m~"textDocument/rename";         hRename[id;p]
+        ; m~"textDocument/prepareRename";  hPrepareRename[id;p]
         ; not null id;               respond[id;(::)]  / unknown request → null
         ; (::)]}
 
 / textDocumentSync=1 means full document sync (client sends entire text on change)
 hInit:{[id]
   respond[id;`capabilities`serverInfo!(
-    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider!
-      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b);
-    `name`version!("q-lsp";"0.2.0"))]}
+    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider!
+      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b);
+    `name`version!("q-lsp";"0.3.0"))]}
 
 / Go-to-definition: search all open documents for a matching assignment
 hDef:{[id;p]
@@ -196,6 +214,51 @@ hSymbols:{[id;p]
             ; mkRange[d`srow;d`scol;d`erow;d`ecol]
             ; d`detail)
       } each d]}
+
+/ References: find all occurrences of the symbol under cursor
+hRefs:{[id;p]
+    ; uri:p[`textDocument]`uri
+    ; line:p[`position]`line; col:p[`position]`character
+    ; w:wordAt[uri;line;col]
+    ; if[0=count w; :respond[id;()]]
+    ; r:raze {[w;uri]
+        doc:.lsp.docs uri
+        ; if[(::)~doc; :()]
+        ; refs:ts_refs[doc 1;doc 0;w]
+        ; if[0=count refs; :()]
+        ; {[uri;r] `uri`range!(string uri;mkRange[r`srow;r`scol;r`erow;r`ecol])}[uri] each refs
+      }[w] each key .lsp.docs
+    ; respond[id;r]}
+
+/ Prepare rename: validate position is a renamable identifier (not a builtin)
+hPrepareRename:{[id;p]
+    ; uri:p[`textDocument]`uri
+    ; line:p[`position]`line; col:p[`position]`character
+    ; nd:nodeAt[uri;line;col]
+    ; if[(::)~nd; :respond[id;(::)]]
+    ; if[not nd[`type] in `identifier`dotted_name; :respond[id;(::)]]
+    ; if[(`$nd`text) in builtins; :respond[id;(::)]]
+    ; respond[id;`range`placeholder!(mkRange[nd`srow;nd`scol;nd`erow;nd`ecol];nd`text)]}
+
+/ Rename: replace all occurrences of a symbol across open documents
+hRename:{[id;p]
+    ; uri:p[`textDocument]`uri
+    ; line:p[`position]`line; col:p[`position]`character
+    ; newName:p`newName
+    ; w:wordAt[uri;line;col]
+    ; if[0=count w; :respond[id;(::)]]
+    ; if[(`$w) in builtins; :respond[id;(::)]]
+    ; pairs:raze {[w;newName;uri]
+        doc:.lsp.docs uri
+        ; if[(::)~doc; :()]
+        ; refs:ts_refs[doc 1;doc 0;w]
+        ; if[0=count refs; :()]
+        ; edits:{[newName;r] `range`newText!(mkRange[r`srow;r`scol;r`erow;r`ecol];newName)}[newName] each refs
+        ; enlist (uri;edits)
+      }[w;newName] each key .lsp.docs
+    ; if[0=count pairs; :respond[id;(::)]]
+    ; changes:(first each pairs)!(last each pairs)
+    ; respond[id;(enlist`changes)!enlist changes]}
 
 / ── Main loop ────────────────────────────────────────────────
 / Read messages forever. Errors in readMsg (EOF) cause clean exit.

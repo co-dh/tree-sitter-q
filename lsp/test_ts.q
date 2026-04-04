@@ -7,6 +7,8 @@ ts_defs:`ts_q 2: (`ts_defs;2);
 ts_children:`ts_q 2: (`ts_children;2);
 ts_node_at:`ts_q 2: (`ts_node_at;4);
 ts_parent:`ts_q 2: (`ts_parent;4);
+ts_refs:`ts_q 2: (`ts_refs;3);
+ts_errors:`ts_q 2: (`ts_errors;2);
 
 npass:0; nfail:0;
 assert:{[msg;cond] $[cond;[npass+:1;-1 "  pass: ",msg];[nfail+:1;-2 "  FAIL: ",msg]]}
@@ -60,6 +62,28 @@ assert["parent of f is assignment";`assignment=p`type];
 
 p2:ts_parent[h;code;1j;0j];
 assert["parent of g is global_assignment";`global_assignment=p2`type];
+
+/ ── ts_refs ─────────────────────────────────────────────────
+-1 "ts_refs";
+refs:ts_refs[h;code;"f"];
+assert["refs is table";98h=type refs];
+assert["refs has 2 hits for f";2=count refs];
+assert["refs cols correct";`srow`scol`erow`ecol~cols refs];
+refs2:ts_refs[h;code;"x"];
+assert["refs has 2 hits for x";2=count refs2];
+refs3:ts_refs[h;code;"nonexistent"];
+assert["refs has 0 hits for nonexistent";0=count refs3];
+
+/ ── ts_errors ───────────────────────────────────────────────
+-1 "ts_errors";
+errs:ts_errors[h;code];
+assert["no errors in good code";0=count errs];
+hbad:ts_parse "f:{[x] x+";
+errs2:ts_errors[hbad;"f:{[x] x+"];
+assert["errors in bad code";0<count errs2];
+assert["error cols correct";`srow`scol`erow`ecol`msg~cols errs2];
+assert["error msg is string";10h=type first errs2`msg];
+ts_free hbad;
 
 / ── ts_free ──────────────────────────────────────────────────
 -1 "ts_free";
