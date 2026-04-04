@@ -86,9 +86,10 @@ def collect_q_files():
                 # skip files that aren't actually q (e.g. HTML 404 pages)
                 if text.startswith("<"):
                     continue
-                # tree-sitter grammar stops parsing at \d (backslash namespace)
-                has_backslash_d = any(l.startswith("\\d ") for l in text.splitlines())
-                files.append((name, path, text, has_backslash_d))
+                # tree-sitter grammar stops parsing at backslash commands (\d, \l, \c, etc.)
+                has_backslash_cmd = any(l[:1] == "\\" and len(l) > 1 and l[1].isalpha()
+                                        for l in text.splitlines())
+                files.append((name, path, text, has_backslash_cmd))
     return files
 
 try:
