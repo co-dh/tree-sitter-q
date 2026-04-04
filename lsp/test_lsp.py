@@ -86,6 +86,9 @@ try:
     check("has documentSymbolProvider", caps.get("documentSymbolProvider"))
     check("has referencesProvider", caps.get("referencesProvider"))
     check("has renameProvider", "renameProvider" in caps)
+    check("has documentHighlightProvider", caps.get("documentHighlightProvider"))
+    check("has foldingRangeProvider", caps.get("foldingRangeProvider"))
+    check("has workspaceSymbolProvider", caps.get("workspaceSymbolProvider"))
     check("serverInfo name", r["result"]["serverInfo"]["name"] == "q-lsp")
     send("initialized", notify=True)
 
@@ -231,6 +234,59 @@ try:
     send("textDocument/didClose", {"textDocument": {"uri": bad_uri}}, notify=True)
     r = recv_notif()
     check("close clears diag", len(r["params"]["diagnostics"]) == 0)
+
+    # ── Document Highlight ───────────────────────────────────
+    # Re-open test doc for remaining tests
+    print("documentHighlight")
+    _notifs.clear()
+    send("textDocument/didOpen", {**td(languageId="q", version=1, text=text2)}, notify=True)
+    time.sleep(0.1)
+    send("textDocument/documentHighlight", {**td(), "position": {"line": 0, "character": 0}})
+    r = recv()
+    highlights = r["result"]
+    check("highlight f has 2 hits", len(highlights) == 2)
+    check("highlight has range", "range" in highlights[0])
+    check("highlight kind is 1 (text)", highlights[0]["kind"] == 1)
+
+    send("textDocument/documentHighlight", {**td(), "position": {"line": 99, "character": 0}})
+    r = recv()
+    check("highlight empty returns empty", r["result"] == [])
+
+    # ── Folding Range ────────────────────────────────────────
+    print("foldingRange")
+    # Open a doc with a multi-line function
+    fold_uri = "file:///fold.q"
+    fold_text = "f:{\n  x+y\n  }\ng:42"
+    send("textDocument/didOpen", {"textDocument": {"uri": fold_uri, "languageId": "q",
+         "version": 1, "text": fold_text}}, notify=True)
+    time.sleep(0.1)
+    send("textDocument/foldingRange", {"textDocument": {"uri": fold_uri}})
+    r = recv()
+    folds = r["result"]
+    check("folding has ranges", len(folds) >= 1)
+    check("fold startLine is 0", folds[0]["startLine"] == 0)
+    check("fold endLine > startLine", folds[0]["endLine"] > folds[0]["startLine"])
+    check("fold kind is region", folds[0]["kind"] == "region")
+    send("textDocument/didClose", {"textDocument": {"uri": fold_uri}}, notify=True)
+    time.sleep(0.1)
+    _notifs.clear()
+
+    # ── Workspace Symbol ─────────────────────────────────────
+    print("workspace/symbol")
+    send("workspace/symbol", {"query": "f"})
+    r = recv()
+    ws_syms = r["result"]
+    check("workspace/symbol has results", len(ws_syms) >= 1)
+    check("workspace/symbol name", any(s["name"] == "f" for s in ws_syms))
+    check("workspace/symbol has location", "location" in ws_syms[0])
+
+    send("workspace/symbol", {"query": ""})
+    r = recv()
+    check("workspace/symbol empty query returns all", len(r["result"]) >= 4)
+
+    send("workspace/symbol", {"query": "zzz_nonexistent"})
+    r = recv()
+    check("workspace/symbol no match returns empty", len(r["result"]) == 0)
 
     # ── didClose ─────────────────────────────────────────────
     print("didClose")

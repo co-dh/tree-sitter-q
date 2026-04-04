@@ -18,6 +18,7 @@ ts_node_at: tso 2: (`ts_node_at;4)
 ts_parent:  tso 2: (`ts_parent;4)
 ts_refs:    tso 2: (`ts_refs;3)
 ts_errors:  tso 2: (`ts_errors;2)
+ts_children:tso 2: (`ts_children;2)
 stdin_read: tso 2: (`stdin_read;1)
 stdin_line: tso 2: (`stdin_line;1)
 ts_init[];
@@ -128,17 +129,20 @@ handle:{[msg]
         ; m~"textDocument/completion"; hCompletion[id;p]
         ; m~"textDocument/documentSymbol"; hSymbols[id;p]
         ; m~"textDocument/references";     hRefs[id;p]
-        ; m~"textDocument/rename";         hRename[id;p]
-        ; m~"textDocument/prepareRename";  hPrepareRename[id;p]
+        ; m~"textDocument/rename";             hRename[id;p]
+        ; m~"textDocument/prepareRename";    hPrepareRename[id;p]
+        ; m~"textDocument/documentHighlight";hHighlight[id;p]
+        ; m~"textDocument/foldingRange";     hFoldingRange[id;p]
+        ; m~"workspace/symbol";              hWorkspaceSymbol[id;p]
         ; not null id;               respond[id;(::)]  / unknown request → null
         ; (::)]}
 
 / textDocumentSync=1 means full document sync (client sends entire text on change)
 hInit:{[id]
   respond[id;`capabilities`serverInfo!(
-    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider!
-      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b);
-    `name`version!("q-lsp";"0.3.0"))]}
+    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider`documentHighlightProvider`foldingRangeProvider`workspaceSymbolProvider!
+      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b;1b;1b;1b);
+    `name`version!("q-lsp";"0.4.0"))]}
 
 / Go-to-definition: search all open documents for a matching assignment
 hDef:{[id;p]
@@ -259,6 +263,44 @@ hRename:{[id;p]
     ; if[0=count pairs; :respond[id;(::)]]
     ; changes:(first each pairs)!(last each pairs)
     ; respond[id;(enlist`changes)!enlist changes]}
+
+/ Document highlight: all occurrences of symbol under cursor in same file
+hHighlight:{[id;p]
+    ; uri:p[`textDocument]`uri; su:`$uri
+    ; line:p[`position]`line; col:p[`position]`character
+    ; w:wordAt[uri;line;col]
+    ; if[0=count w; :respond[id;()]]
+    ; doc:.lsp.docs su
+    ; if[(::)~doc; :respond[id;()]]
+    ; refs:ts_refs[doc 1;doc 0;w]
+    ; respond[id;{`range`kind!(mkRange[x`srow;x`scol;x`erow;x`ecol];1)} each refs]}
+
+/ Folding ranges: top-level multi-line nodes
+hFoldingRange:{[id;p]
+    ; uri:p[`textDocument]`uri; su:`$uri
+    ; doc:.lsp.docs su
+    ; if[(::)~doc; :respond[id;()]]
+    ; ch:ts_children[doc 1;doc 0]
+    ; ml:{x where {x[`srow]<x`erow} each x} ch
+    ; respond[id;{`startLine`startCharacter`endLine`endCharacter`kind!(
+        x`srow;x`scol;x`erow;x`ecol;"region")} each ml]}
+
+/ Workspace symbol: search definitions across all open documents
+hWorkspaceSymbol:{[id;p]
+    ; q:p`query
+    ; r:raze {[q;su]
+        doc:.lsp.docs su
+        ; if[(::)~doc; :()]
+        ; d:doc 2
+        ; hits:$[0=count q;d;select from d where (string each name) like (q,"*")]
+        ; if[0=count hits; :()]
+        ; {[su;d] `name`kind`location!(
+            string d`name
+            ; $[d`lambda;12;13]
+            ; `uri`range!(string su;mkRange[d`srow;d`scol;d`erow;d`ecol])
+          )}[su] each hits
+      }[q] each key .lsp.docs
+    ; respond[id;r]}
 
 / ── Main loop ────────────────────────────────────────────────
 / Read messages forever. Errors in readMsg (EOF) cause clean exit.
