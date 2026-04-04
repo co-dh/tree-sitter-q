@@ -19,6 +19,8 @@ ts_parent:  tso 2: (`ts_parent;4)
 ts_refs:    tso 2: (`ts_refs;3)
 ts_errors:  tso 2: (`ts_errors;2)
 ts_children:tso 2: (`ts_children;2)
+ts_ancestors:tso 2: (`ts_ancestors;4)
+ts_tokens:  tso 2: (`ts_tokens;2)
 stdin_read: tso 2: (`stdin_read;1)
 stdin_line: tso 2: (`stdin_line;1)
 ts_init[];
@@ -134,15 +136,18 @@ handle:{[msg]
         ; m~"textDocument/documentHighlight";hHighlight[id;p]
         ; m~"textDocument/foldingRange";     hFoldingRange[id;p]
         ; m~"workspace/symbol";              hWorkspaceSymbol[id;p]
+        ; m~"textDocument/selectionRange";   hSelectionRange[id;p]
+        ; m~"textDocument/semanticTokens/full";hSemanticTokensFull[id;p]
+        ; m~"textDocument/codeAction";       hCodeAction[id;p]
         ; not null id;               respond[id;(::)]  / unknown request → null
         ; (::)]}
 
 / textDocumentSync=1 means full document sync (client sends entire text on change)
 hInit:{[id]
   respond[id;`capabilities`serverInfo!(
-    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider`documentHighlightProvider`foldingRangeProvider`workspaceSymbolProvider!
-      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b;1b;1b;1b);
-    `name`version!("q-lsp";"0.4.0"))]}
+    `textDocumentSync`completionProvider`definitionProvider`documentSymbolProvider`hoverProvider`referencesProvider`renameProvider`documentHighlightProvider`foldingRangeProvider`workspaceSymbolProvider`selectionRangeProvider`semanticTokensProvider`codeActionProvider!
+      (1;`triggerCharacters`resolveProvider!((".";"\\`");0b);1b;1b;1b;1b;enlist[`prepareProvider]!enlist 1b;1b;1b;1b;1b;`full`legend!(1b;semanticLegend);1b);
+    `name`version!("q-lsp";"0.5.0"))]}
 
 / Go-to-definition: search all open documents for a matching assignment
 hDef:{[id;p]
@@ -301,6 +306,55 @@ hWorkspaceSymbol:{[id;p]
           )}[su] each hits
       }[q] each key .lsp.docs
     ; respond[id;r]}
+
+/ Selection range: nested ranges from leaf to root for expand/shrink selection
+hSelectionRange:{[id;p]
+    ; uri:p[`textDocument]`uri; su:`$uri
+    ; doc:.lsp.docs su
+    ; if[(::)~doc; :respond[id;()]]
+    ; respond[id;{[doc;pos]
+        nodes:ts_ancestors[doc 1;doc 0;pos`line;pos`character]
+        ; if[0=count nodes; :(::)]
+        / Build nested SelectionRange from outermost to innermost
+        ; r:(::); i:count[nodes]-1
+        ; while[i>=0; nd:nodes i; r:`range`parent!(mkRange[nd`srow;nd`scol;nd`erow;nd`ecol];r); i-:1]
+        ; r
+      }[doc] each p`positions]}
+
+/ Semantic tokens: full document token classification
+/ Legend: variable(0) parameter(1) function(2) keyword(3) operator(4) number(5) string(6) comment(7)
+/ Modifiers: declaration(0) definition(1) defaultLibrary(2)
+semanticLegend:`tokenTypes`tokenModifiers!(
+    ("variable";"parameter";"function";"keyword";"operator";"number";"string";"comment");
+    ("declaration";"definition";"defaultLibrary"))
+hSemanticTokensFull:{[id;p]
+    ; uri:p[`textDocument]`uri; su:`$uri
+    ; doc:.lsp.docs su
+    ; if[(::)~doc; :respond[id;(enlist`data)!enlist `long$()]]
+    ; toks:`line`col xasc ts_tokens[doc 1;doc 0]
+    ; if[0=count toks; :respond[id;(enlist`data)!enlist `long$()]]
+    / Delta-encode: deltaLine, deltaStartChar, length, tokenType, tokenModifiers
+    ; dl:deltas toks`line
+    ; dc:?[dl>0;toks`col;deltas toks`col]
+    ; data:raze flip (dl;dc;toks`len;toks`tokenType;toks`tokenModifiers)
+    ; respond[id;(enlist`data)!enlist data]}
+
+/ Code actions: suggest fixes for parse errors (missing tokens)
+hCodeAction:{[id;p]
+    ; uri:p[`textDocument]`uri
+    ; diags:p[`context]`diagnostics
+    ; actions:raze {[uri;d]
+        msg:d`message
+        ; if[not msg like "missing *"; :()]
+        ; token:8_ msg                                       / strip "missing " prefix
+        ; if[not token in ("}";")";";";"[";"]"); :()]        / only fix simple tokens
+        ; pos:d[`range]`start
+        ; edit:`range`newText!(mkRange[pos`line;pos`character;pos`line;pos`character];token)
+        ; enlist `title`kind`edit!(
+            "Insert ",token; "quickfix";
+            (enlist`changes)!enlist (enlist `$uri)!enlist enlist edit)
+      }[uri] each diags
+    ; respond[id;actions]}
 
 / ── Main loop ────────────────────────────────────────────────
 / Read messages forever. Errors in readMsg (EOF) cause clean exit.

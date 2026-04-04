@@ -9,6 +9,8 @@ ts_node_at:`ts_q 2: (`ts_node_at;4);
 ts_parent:`ts_q 2: (`ts_parent;4);
 ts_refs:`ts_q 2: (`ts_refs;3);
 ts_errors:`ts_q 2: (`ts_errors;2);
+ts_ancestors:`ts_q 2: (`ts_ancestors;4);
+ts_tokens:`ts_q 2: (`ts_tokens;2);
 
 npass:0; nfail:0;
 assert:{[msg;cond] $[cond;[npass+:1;-1 "  pass: ",msg];[nfail+:1;-2 "  FAIL: ",msg]]}
@@ -84,6 +86,28 @@ assert["errors in bad code";0<count errs2];
 assert["error cols correct";`srow`scol`erow`ecol`msg~cols errs2];
 assert["error msg is string";10h=type first errs2`msg];
 ts_free hbad;
+
+/ ── ts_ancestors ────────────────────────────────────────────
+-1 "ts_ancestors";
+anc:ts_ancestors[h;code;0j;9j];
+assert["ancestors returns list";0h=type anc];
+assert["ancestors has >1 nodes";(count anc)>1];
+assert["innermost is identifier";`identifier=anc[0]`type];
+assert["outermost is source_file";`source_file=anc[count[anc]-1]`type];
+
+/ ── ts_tokens ───────────────────────────────────────────────
+-1 "ts_tokens";
+toks:ts_tokens[h;code];
+assert["tokens is table";98h=type toks];
+assert["tokens has entries";(count toks)>0];
+assert["token cols correct";`line`col`len`tokenType`tokenModifiers~cols toks];
+/ f is a function definition (type 2, modifier 2=definition)
+ftok:first select from toks where line=0,col=0;
+assert["f is function type";2=ftok`tokenType];
+assert["f has definition mod";2=ftok`tokenModifiers];
+/ x in params is parameter (type 1)
+ptoks:select from toks where line=0,tokenType=1;
+assert["params found";(count ptoks)>=2];
 
 / ── ts_free ──────────────────────────────────────────────────
 -1 "ts_free";

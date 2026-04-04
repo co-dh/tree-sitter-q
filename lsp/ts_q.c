@@ -412,3 +412,119 @@ K ts_errors(K h, K text) {
   kK(vals)[4] = msgs;
   return xT(xD(colnames, vals));
 }
+
+// ── Ancestors ──────────────────────────────────────────────
+// ts_ancestors[handle;text;row;col] — chain of nodes from leaf to root
+// Returns list of dicts (innermost first)
+K ts_ancestors(K h, K text, K row, K col) {
+  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
+  if (text->t != KC) return krr("type");
+  TSTree *tree = (TSTree*)toJ(h);
+  if (!tree) return krr("null tree");
+
+  TSPoint pt = {(uint32_t)toJ(row), (uint32_t)toJ(col)};
+  TSNode node = ts_node_named_descendant_for_point_range(
+    ts_tree_root_node(tree), pt, pt);
+  if (ts_node_is_null(node)) return ktn(0, 0);
+
+  const char *src = (const char*)kC(text);
+  K result = ktn(0, 0);
+  while (!ts_node_is_null(node)) {
+    jk(&result, node_dict(node, src, NULL));
+    node = ts_node_parent(node);
+  }
+  return result;
+}
+
+// ── Semantic tokens ────────────────────────────────────────
+// ts_tokens[handle;text] — classify all leaf nodes for semantic highlighting
+// Legend: 0=variable, 1=parameter, 2=function, 3=keyword, 4=operator,
+//         5=number, 6=string, 7=comment
+// Returns table: (line;col;len;tokenType;tokenModifiers)
+K ts_tokens(K h, K text) {
+  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
+  if (text->t != KC) return krr("type");
+  TSTree *tree = (TSTree*)toJ(h);
+  if (!tree) return krr("null tree");
+
+  TSNode root = ts_tree_root_node(tree);
+  K lines = ktn(KJ, 0), cols = ktn(KJ, 0), lens = ktn(KJ, 0);
+  K types = ktn(KJ, 0), mods = ktn(KJ, 0);
+
+  TSTreeCursor cursor = ts_tree_cursor_new(root);
+  int done = 0;
+  while (!done) {
+    TSNode node = ts_tree_cursor_current_node(&cursor);
+
+    // Only process leaf nodes
+    if (ts_node_child_count(node) == 0) {
+      const char *type = ts_node_type(node);
+      int is_named = ts_node_is_named(node);
+      J tt = -1, tm = 0;
+
+      if (is_named) {
+        if (strcmp(type, "identifier") == 0 || strcmp(type, "dotted_name") == 0) {
+          tt = 0; // variable by default
+          TSNode parent = ts_node_parent(node);
+          if (!ts_node_is_null(parent)) {
+            const char *ptype = ts_node_type(parent);
+            // Parameter?
+            if (strcmp(ptype, "params") == 0) {
+              tt = 1; tm = 2; // parameter + definition
+            }
+            // Function definition (assignment of lambda)?
+            else if (strcmp(ptype, "assignment") == 0 || strcmp(ptype, "global_assignment") == 0) {
+              TSNode name_n = ts_node_child_by_field_name(parent, "name", 4);
+              if (!ts_node_is_null(name_n) &&
+                  ts_node_start_byte(name_n) == ts_node_start_byte(node)) {
+                tm = 2; // definition
+                TSNode val_n = ts_node_child_by_field_name(parent, "value", 5);
+                if (!ts_node_is_null(val_n) && strcmp(ts_node_type(val_n), "lambda") == 0)
+                  tt = 2; // function
+              }
+            }
+          }
+        }
+        else if (strcmp(type, "integer") == 0 || strcmp(type, "float_lit") == 0 ||
+                 strcmp(type, "inf_lit") == 0)               tt = 5;
+        else if (strcmp(type, "identifier") == 0)             {} // already handled
+        else if (strcmp(type, "line_comment") == 0 ||
+                 strcmp(type, "block_comment") == 0)           tt = 7;
+        else if (strcmp(type, "verb") == 0 ||
+                 strcmp(type, "operator") == 0 ||
+                 strcmp(type, "adverb") == 0)                  tt = 4;
+        else if (strcmp(type, "keyword_op") == 0)              tt = 3;
+        else if (strcmp(type, "bool_lit") == 0 ||
+                 strcmp(type, "null_lit") == 0)                 tt = 5;
+      } else {
+        // Anonymous keyword nodes
+        if (strcmp(type, "if") == 0 || strcmp(type, "do") == 0 ||
+            strcmp(type, "while") == 0 || strcmp(type, "$") == 0)
+          tt = 3;
+      }
+
+      if (tt >= 0) {
+        TSPoint sp = ts_node_start_point(node);
+        uint32_t sb = ts_node_start_byte(node), eb = ts_node_end_byte(node);
+        J l = sp.row, c = sp.column, ln = eb - sb;
+        ja(&lines, &l); ja(&cols, &c); ja(&lens, &ln);
+        ja(&types, &tt); ja(&mods, &tm);
+      }
+    }
+
+    if (ts_tree_cursor_goto_first_child(&cursor)) continue;
+    while (!ts_tree_cursor_goto_next_sibling(&cursor)) {
+      if (!ts_tree_cursor_goto_parent(&cursor)) { done = 1; break; }
+    }
+  }
+  ts_tree_cursor_delete(&cursor);
+
+  K colnames = ktn(KS, 5);
+  kS(colnames)[0] = ss("line"); kS(colnames)[1] = ss("col");
+  kS(colnames)[2] = ss("len"); kS(colnames)[3] = ss("tokenType");
+  kS(colnames)[4] = ss("tokenModifiers");
+  K vals = ktn(0, 5);
+  kK(vals)[0] = lines; kK(vals)[1] = cols; kK(vals)[2] = lens;
+  kK(vals)[3] = types; kK(vals)[4] = mods;
+  return xT(xD(colnames, vals));
+}

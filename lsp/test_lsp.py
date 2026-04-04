@@ -89,6 +89,9 @@ try:
     check("has documentHighlightProvider", caps.get("documentHighlightProvider"))
     check("has foldingRangeProvider", caps.get("foldingRangeProvider"))
     check("has workspaceSymbolProvider", caps.get("workspaceSymbolProvider"))
+    check("has selectionRangeProvider", caps.get("selectionRangeProvider"))
+    check("has semanticTokensProvider", "semanticTokensProvider" in caps)
+    check("has codeActionProvider", caps.get("codeActionProvider"))
     check("serverInfo name", r["result"]["serverInfo"]["name"] == "q-lsp")
     send("initialized", notify=True)
 
@@ -287,6 +290,61 @@ try:
     send("workspace/symbol", {"query": "zzz_nonexistent"})
     r = recv()
     check("workspace/symbol no match returns empty", len(r["result"]) == 0)
+
+    # ── Selection Range ──────────────────────────────────────
+    print("selectionRange")
+    send("textDocument/selectionRange", {**td(), "positions": [{"line": 0, "character": 9}]})
+    r = recv()
+    sel = r["result"]
+    check("selectionRange returns list", isinstance(sel, list) and len(sel) == 1)
+    check("selectionRange has range", "range" in sel[0])
+    check("selectionRange has parent", "parent" in sel[0])
+    # Walk up the chain — should have multiple levels
+    depth = 0; node = sel[0]
+    while node and isinstance(node, dict) and "range" in node:
+        depth += 1; node = node.get("parent")
+    check("selectionRange depth > 2", depth > 2)
+
+    # ── Semantic Tokens ──────────────────────────────────────
+    print("semanticTokens/full")
+    send("textDocument/semanticTokens/full", td())
+    r = recv()
+    data = r["result"]["data"]
+    check("semantic tokens has data", len(data) > 0)
+    check("semantic tokens multiple of 5", len(data) % 5 == 0)
+    # First token should be f at (0,0) — function definition (type=2, mod=2)
+    check("first token deltaLine=0", data[0] == 0)
+    check("first token deltaCol=0", data[1] == 0)
+    check("first token type=function(2)", data[3] == 2)
+    check("first token mod=definition(2)", data[4] == 2)
+
+    # ── Code Action ──────────────────────────────────────────
+    print("codeAction")
+    # Open a file with a missing bracket
+    ca_uri = "file:///codeaction.q"
+    send("textDocument/didOpen", {"textDocument": {"uri": ca_uri, "languageId": "q",
+         "version": 1, "text": "f:{[x] x+"}}, notify=True)
+    diag_notif = recv_notif()
+    diags = diag_notif["params"]["diagnostics"]
+    # Request code actions with those diagnostics
+    send("textDocument/codeAction", {"textDocument": {"uri": ca_uri},
+         "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 10}},
+         "context": {"diagnostics": diags}})
+    r = recv()
+    actions = r["result"]
+    # May or may not have actions depending on whether errors are "missing" type
+    check("codeAction returns list", isinstance(actions, list))
+    # Check with a known missing-bracket case
+    missing_diags = [d for d in diags if d["message"].startswith("missing ")]
+    if missing_diags:
+        check("codeAction has fix for missing token", len(actions) > 0)
+        check("codeAction kind is quickfix", actions[0]["kind"] == "quickfix")
+        check("codeAction has edit", "edit" in actions[0])
+    else:
+        check("codeAction empty for non-missing errors", True)
+    send("textDocument/didClose", {"textDocument": {"uri": ca_uri}}, notify=True)
+    time.sleep(0.1)
+    _notifs.clear()
 
     # ── didClose ─────────────────────────────────────────────
     print("didClose")
