@@ -148,8 +148,25 @@ bool tree_sitter_q_external_scanner_scan(
       }
     }
     // / at col 0 followed by anything = line comment
+    // Consume consecutive / comments to avoid parser error recovery
+    // skipping the second / (tree-sitter GLR bug with extras)
     if (valid_symbols[LINE_COMMENT]) {
       consume_line(lexer);
+      while (lexer->lookahead == '\n' || lexer->lookahead == '\r') {
+        advance(lexer);  // consume newline
+        if (lexer->lookahead == '/') {
+          advance(lexer);  // consume /
+          // // or / at col 0 followed by non-newline → another comment line
+          if (lexer->lookahead == '/' || (lexer->lookahead != '\n'
+              && lexer->lookahead != '\r' && lexer->lookahead != 0)) {
+            consume_line(lexer);
+            continue;
+          }
+          // / followed by newline = block comment start, stop merging
+          break;
+        }
+        break;  // next line doesn't start with / → stop
+      }
       lexer->mark_end(lexer);
       lexer->result_symbol = LINE_COMMENT;
       return true;

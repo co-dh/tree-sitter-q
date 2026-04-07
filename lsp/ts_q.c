@@ -11,6 +11,27 @@ extern const TSLanguage *tree_sitter_q(void);
 
 static TSParser *parser = NULL;
 
+// Deepest named node at point — workaround for ts_node_named_descendant_for_point_range
+// not descending into children whose start equals the query point in some parse tables
+static TSNode deepest_named_at(TSNode root, TSPoint pt) {
+  TSNode best = root;
+  for (;;) {
+    TSNode next = best;  int found = 0;
+    uint32_t n = ts_node_named_child_count(best);
+    for (uint32_t i = 0; i < n; i++) {
+      TSNode ch = ts_node_named_child(best, i);
+      TSPoint s = ts_node_start_point(ch), e = ts_node_end_point(ch);
+      if ((s.row < pt.row || (s.row == pt.row && s.column <= pt.column)) &&
+          (e.row > pt.row || (e.row == pt.row && e.column > pt.column))) {
+        next = ch; found = 1; break;
+      }
+    }
+    if (!found) break;
+    best = next;
+  }
+  return best;
+}
+
 // Extract long from int(-6h), long(-7h), or float(-9h) atom
 static J toJ(K x) {
   switch(x->t) {
@@ -144,8 +165,7 @@ K ts_node_children(K h, K text, K row, K col) {
   if (!tree) return krr("null tree");
 
   TSPoint pt = {(uint32_t)toJ(row), (uint32_t)toJ(col)};
-  TSNode node = ts_node_named_descendant_for_point_range(
-    ts_tree_root_node(tree), pt, pt);
+  TSNode node = deepest_named_at(ts_tree_root_node(tree), pt);
   if (ts_node_is_null(node)) return ktn(0, 0);
 
   uint32_t n = ts_node_child_count(node);
@@ -167,8 +187,7 @@ K ts_node_at(K h, K text, K row, K col) {
   if (!tree) return krr("null tree");
 
   TSPoint pt = {(uint32_t)toJ(row), (uint32_t)toJ(col)};
-  TSNode node = ts_node_named_descendant_for_point_range(
-    ts_tree_root_node(tree), pt, pt);
+  TSNode node = deepest_named_at(ts_tree_root_node(tree), pt);
   if (ts_node_is_null(node)) return knk(0);
 
   const char *src = (const char*)kC(text);
@@ -197,8 +216,7 @@ K ts_parent(K h, K text, K row, K col) {
   if (!tree) return krr("null tree");
 
   TSPoint pt = {(uint32_t)toJ(row), (uint32_t)toJ(col)};
-  TSNode node = ts_node_named_descendant_for_point_range(
-    ts_tree_root_node(tree), pt, pt);
+  TSNode node = deepest_named_at(ts_tree_root_node(tree), pt);
   if (ts_node_is_null(node)) return knk(0);
   TSNode parent = ts_node_parent(node);
   if (ts_node_is_null(parent)) return knk(0);
@@ -423,8 +441,7 @@ K ts_ancestors(K h, K text, K row, K col) {
   if (!tree) return krr("null tree");
 
   TSPoint pt = {(uint32_t)toJ(row), (uint32_t)toJ(col)};
-  TSNode node = ts_node_named_descendant_for_point_range(
-    ts_tree_root_node(tree), pt, pt);
+  TSNode node = deepest_named_at(ts_tree_root_node(tree), pt);
   if (ts_node_is_null(node)) return ktn(0, 0);
 
   const char *src = (const char*)kC(text);

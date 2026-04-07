@@ -15,7 +15,13 @@ test-lsp: lsp/ts_q.so
 test-examples: lsp/ts_q.so
 	cd lsp && python3 test_examples.py
 
+errors:
+	@for f in lsp/examples/*.q lsp/examples/ext/*.q; do \
+		errs=$$(tree-sitter parse "$$f" 2>&1 | grep -c ERROR); \
+		if [ "$$errs" -gt 0 ]; then echo "$$errs\t$$f"; fi; \
+	done
+
 clean:
 	rm -f lsp/ts_q.so
 
-.PHONY: test test-ts test-lsp test-examples clean
+.PHONY: test test-ts test-lsp test-examples errors clean
