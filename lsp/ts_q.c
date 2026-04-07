@@ -11,6 +11,10 @@ extern const TSLanguage *tree_sitter_q(void);
 
 static TSParser *parser = NULL;
 
+// Common validation: check arg is a numeric atom (long, int, or float)
+#define CHECK_NUM(x, fn) if ((x)->t != -KJ && (x)->t != -KI && (x)->t != -KF) return krr(fn ": expected number")
+#define CHECK_STR(x, fn) if ((x)->t != KC) return krr(fn ": expected string")
+
 // Deepest named node at point — workaround for ts_node_named_descendant_for_point_range
 // not descending into children whose start equals the query point in some parse tables
 static TSNode deepest_named_at(TSNode root, TSPoint pt) {
@@ -45,7 +49,7 @@ static J toJ(K x) {
 // ── Stdin byte reading (LSP needs exact byte counts) ────────
 // stdin_read[n] — read exactly n bytes from stdin
 K stdin_read(K x) {
-  if (x->t != -KJ && x->t != -KI && x->t != -KF) return krr("stdin_read: expected number");
+  CHECK_NUM(x, "stdin_read");
   J n = toJ(x);
   if (n <= 0) return ktn(KC, 0);
   K result = ktn(KC, n);
@@ -95,7 +99,7 @@ K ts_parse(K x) {
 
 // ts_free[handle] — free a parse tree
 K ts_free(K x) {
-  if (x->t != -KJ && x->t != -KI && x->t != -KF) return krr("ts_free: expected number");
+  CHECK_NUM(x, "ts_free");
   TSTree *tree = (TSTree*)toJ(x);
   if (tree) ts_tree_delete(tree);
   return kb(1);
@@ -140,8 +144,7 @@ static K node_dict(TSNode node, const char *src, const char *field_name) {
 // ── Children ────────────────────────────────────────────────
 // ts_children[handle;text] — return list of dicts for root's children
 K ts_children(K h, K text) {
-  if (h->t != -KJ) return krr("ts_children: expected long handle");
-  if (text->t != KC) return krr("ts_children: expected string text");
+  CHECK_NUM(h, "ts_children"); CHECK_STR(text, "ts_children");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("ts_children: null tree");
 
@@ -159,8 +162,7 @@ K ts_children(K h, K text) {
 
 // ts_node_children[handle;text;row;col] — children of node at position
 K ts_node_children(K h, K text, K row, K col) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_node_children"); CHECK_STR(text, "ts_node_children");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -181,8 +183,7 @@ K ts_node_children(K h, K text, K row, K col) {
 
 // ts_node_at[handle;text;row;col] — get node info at position
 K ts_node_at(K h, K text, K row, K col) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_node_at"); CHECK_STR(text, "ts_node_at");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -210,8 +211,7 @@ K ts_node_at(K h, K text, K row, K col) {
 
 // ts_parent[handle;text;row;col] — get parent node info at position
 K ts_parent(K h, K text, K row, K col) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_parent"); CHECK_STR(text, "ts_parent");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -229,8 +229,7 @@ K ts_parent(K h, K text, K row, K col) {
 // ts_defs[handle;text] — extract top-level assignments as table
 // Returns table: (name;srow;scol;erow;ecol;global;lambda;detail)
 K ts_defs(K h, K text) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_defs"); CHECK_STR(text, "ts_defs");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -251,7 +250,7 @@ K ts_defs(K h, K text) {
     if (!is_assign && !is_global) continue;
 
     // Get name field
-    TSNode name_node = ts_node_child_by_field_name(child, "name", 4);
+    TSNode name_node = ts_node_child_by_field_name(child, "name", sizeof("name")-1);
     if (ts_node_is_null(name_node)) continue;
     uint32_t nsb = ts_node_start_byte(name_node);
     uint32_t neb = ts_node_end_byte(name_node);
@@ -262,7 +261,7 @@ K ts_defs(K h, K text) {
     nbuf[nlen] = 0;
 
     // Get value field — check if lambda, extract full value text
-    TSNode val_node = ts_node_child_by_field_name(child, "value", 5);
+    TSNode val_node = ts_node_child_by_field_name(child, "value", sizeof("value")-1);
     int is_lambda = 0;
     uint32_t vsb = 0, veb = 0;
     if (!ts_node_is_null(val_node)) {
@@ -308,8 +307,7 @@ K ts_defs(K h, K text) {
 // ts_refs[handle;text;name] — find all identifier/dotted_name nodes matching name
 // Returns table: (srow;scol;erow;ecol)
 K ts_refs(K h, K text, K name) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_refs"); CHECK_STR(text, "ts_refs");
   if (name->t != KC && name->t != -KC) return krr("ts_refs: expected string name");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
@@ -361,8 +359,7 @@ K ts_refs(K h, K text, K name) {
 // ts_errors[handle;text] — find ERROR and MISSING nodes in parse tree
 // Returns table: (srow;scol;erow;ecol;msg)
 K ts_errors(K h, K text) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_errors"); CHECK_STR(text, "ts_errors");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -435,8 +432,7 @@ K ts_errors(K h, K text) {
 // ts_ancestors[handle;text;row;col] — chain of nodes from leaf to root
 // Returns list of dicts (innermost first)
 K ts_ancestors(K h, K text, K row, K col) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_ancestors"); CHECK_STR(text, "ts_ancestors");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -459,8 +455,7 @@ K ts_ancestors(K h, K text, K row, K col) {
 //         5=number, 6=string, 7=comment
 // Returns table: (line;col;len;tokenType;tokenModifiers)
 K ts_tokens(K h, K text) {
-  if (h->t != -KJ && h->t != -KI && h->t != -KF) return krr("type");
-  if (text->t != KC) return krr("type");
+  CHECK_NUM(h, "ts_tokens"); CHECK_STR(text, "ts_tokens");
   TSTree *tree = (TSTree*)toJ(h);
   if (!tree) return krr("null tree");
 
@@ -491,11 +486,11 @@ K ts_tokens(K h, K text) {
             }
             // Function definition (assignment of lambda)?
             else if (strcmp(ptype, "assignment") == 0 || strcmp(ptype, "global_assignment") == 0) {
-              TSNode name_n = ts_node_child_by_field_name(parent, "name", 4);
+              TSNode name_n = ts_node_child_by_field_name(parent, "name", sizeof("name")-1);
               if (!ts_node_is_null(name_n) &&
                   ts_node_start_byte(name_n) == ts_node_start_byte(node)) {
                 tm = 2; // definition
-                TSNode val_n = ts_node_child_by_field_name(parent, "value", 5);
+                TSNode val_n = ts_node_child_by_field_name(parent, "value", sizeof("value")-1);
                 if (!ts_node_is_null(val_n) && strcmp(ts_node_type(val_n), "lambda") == 0)
                   tt = 2; // function
               }
@@ -504,7 +499,6 @@ K ts_tokens(K h, K text) {
         }
         else if (strcmp(type, "integer") == 0 || strcmp(type, "float_lit") == 0 ||
                  strcmp(type, "inf_lit") == 0)               tt = 5;
-        else if (strcmp(type, "identifier") == 0)             {} // already handled
         else if (strcmp(type, "line_comment") == 0 ||
                  strcmp(type, "block_comment") == 0)           tt = 7;
         else if (strcmp(type, "verb") == 0 ||
